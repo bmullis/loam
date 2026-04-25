@@ -8,14 +8,14 @@ defmodule Loam.Phoenix.KeyExprTest do
 
   describe "encode/3 + decode/1" do
     property "round-trips arbitrary topic binaries" do
-      check all topic <- binary() do
+      check all(topic <- binary()) do
         encoded = KeyExpr.encode(@namespace, MyApp.PubSub, topic)
         assert {:ok, {"Elixir.MyApp.PubSub", ^topic}} = KeyExpr.decode(encoded)
       end
     end
 
     property "round-trips arbitrary pubsub names (string form)" do
-      check all name <- string(:printable, min_length: 1) do
+      check all(name <- string(:printable, min_length: 1)) do
         encoded = KeyExpr.encode(@namespace, name, "topic")
         assert {:ok, {^name, "topic"}} = KeyExpr.decode(encoded)
       end

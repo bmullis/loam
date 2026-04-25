@@ -6,7 +6,7 @@ defmodule Loam.Phoenix.EnvelopeTest do
 
   describe "encode/1 + decode/1" do
     property "round-trips arbitrary terms" do
-      check all term <- term() do
+      check all(term <- term()) do
         assert {:ok, ^term} = term |> Envelope.encode() |> Envelope.decode()
       end
     end

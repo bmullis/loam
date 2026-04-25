@@ -16,9 +16,19 @@ defmodule Loam.Phoenix.KeyExpr do
   @spec encode(String.t(), atom() | String.t(), binary()) :: String.t()
   def encode(namespace, pubsub_name, topic)
       when is_binary(namespace) and is_binary(topic) do
+    "#{prefix(namespace, pubsub_name)}/#{Base.url_encode64(topic, padding: false)}"
+  end
+
+  @doc """
+  Returns the keyexpr prefix for a pubsub instance, without a topic segment.
+
+  Used to declare the broad `<prefix>/**` subscription that catches every
+  topic published to this pubsub instance.
+  """
+  @spec prefix(String.t(), atom() | String.t()) :: String.t()
+  def prefix(namespace, pubsub_name) when is_binary(namespace) do
     pubsub_segment = pubsub_name |> to_string() |> Base.url_encode64(padding: false)
-    topic_segment = Base.url_encode64(topic, padding: false)
-    "#{namespace}/#{pubsub_segment}/#{topic_segment}"
+    "#{namespace}/#{pubsub_segment}"
   end
 
   @spec decode(String.t()) ::
