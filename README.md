@@ -1,6 +1,6 @@
 # loam
 
-Research project exploring what OTP-shaped abstractions should look like when the underlying substrate is [Zenoh](https://zenoh.io/) instead of Erlang distribution.
+Exploring what OTP-shaped abstractions should look like when the underlying substrate is [Zenoh](https://zenoh.io/) instead of Erlang distribution.
 
 ## Status
 
