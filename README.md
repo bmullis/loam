@@ -6,7 +6,7 @@ A long-term research project exploring what OTP-shaped abstractions should look 
 
 Early. No Hex package yet. No public interfaces yet.
 
-See [CLAUDE.md](CLAUDE.md) for the thesis, roadmap, and working conventions. PRDs and RFCs land under `docs/` as specifications stabilize.
+PRDs and RFCs land under `docs/` as specifications stabilize.
 
 ## Shape
 
