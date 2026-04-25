@@ -27,6 +27,8 @@ defmodule Loam.Phoenix.Session do
     node_name_override = Keyword.get(opts, :node_name)
     zenoh_config = Keyword.get(opts, :zenoh, [])
 
+    publishers = :ets.new(:loam_publishers, [:public, :set, read_concurrency: true])
+
     with {:ok, json5} <- build_zenoh_config(zenoh_config),
          {:ok, session_id} <- Zenohex.Session.open(json5),
          {:ok, info} <- Zenohex.Session.info(session_id),
@@ -34,9 +36,7 @@ defmodule Loam.Phoenix.Session do
          {:ok, sub_id} <-
            Zenohex.Session.declare_subscriber(session_id, "#{prefix}/**", self(),
              allowed_origin: :remote
-           ),
-         {:ok, pub_id} <-
-           Zenohex.Session.declare_publisher(session_id, "#{prefix}/_") do
+           ) do
       node_name = node_name_override || info.zid
 
       :persistent_term.put(
@@ -45,7 +45,8 @@ defmodule Loam.Phoenix.Session do
           session_id: session_id,
           pubsub_name: pubsub_name,
           namespace: namespace,
-          node_name: node_name
+          node_name: node_name,
+          publishers: publishers
         }
       )
 
@@ -56,7 +57,7 @@ defmodule Loam.Phoenix.Session do
         node_name: node_name,
         session_id: session_id,
         sub_id: sub_id,
-        pub_id: pub_id
+        publishers: publishers
       }
 
       {:ok, state}
@@ -80,6 +81,24 @@ defmodule Loam.Phoenix.Session do
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl true
+  def handle_call({:declare_publisher, key}, _from, state) do
+    case :ets.lookup(state.publishers, key) do
+      [{^key, pub_id}] ->
+        {:reply, {:ok, pub_id}, state}
+
+      [] ->
+        case Zenohex.Session.declare_publisher(state.session_id, key) do
+          {:ok, pub_id} ->
+            :ets.insert(state.publishers, {key, pub_id})
+            {:reply, {:ok, pub_id}, state}
+
+          {:error, _} = err ->
+            {:reply, err, state}
+        end
+    end
+  end
+
+  @impl true
   def terminate(_reason, state) do
     :persistent_term.erase({__MODULE__, state.adapter_name})
     Zenohex.Session.close(state.session_id)
@@ -93,10 +112,24 @@ defmodule Loam.Phoenix.Session do
 
   @doc false
   def publish(adapter_name, topic, message, dispatcher) do
-    %{session_id: session_id, namespace: ns, pubsub_name: name} = fetch!(adapter_name)
+    %{namespace: ns, pubsub_name: name, publishers: publishers} = fetch!(adapter_name)
     key = KeyExpr.encode(ns, name, topic)
     payload = Envelope.encode({message, dispatcher})
-    Zenohex.Session.put(session_id, key, payload)
+
+    pub_id =
+      case :ets.lookup(publishers, key) do
+        [{^key, id}] -> id
+        [] -> declare_publisher!(adapter_name, key)
+      end
+
+    Zenohex.Publisher.put(pub_id, payload)
+  end
+
+  defp declare_publisher!(adapter_name, key) do
+    case GenServer.call(adapter_name, {:declare_publisher, key}) do
+      {:ok, pub_id} -> pub_id
+      {:error, reason} -> raise "loam: failed to declare publisher for #{key}: #{inspect(reason)}"
+    end
   end
 
   ## Helpers

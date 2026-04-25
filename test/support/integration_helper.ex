@@ -1,12 +1,39 @@
 defmodule Loam.Phoenix.IntegrationHelper do
   @moduledoc false
 
-  # Runs on a peer BEAM via :peer.call to start a Phoenix.PubSub instance with
-  # the loam adapter, then broadcast a message back to the parent BEAM via
-  # Zenoh. Lives under test/support/ so it's compiled to disk (standard test
-  # modules are compiled in-memory and aren't visible to peer nodes).
+  # Functions invoked on a peer BEAM via :peer.call. Lives under test/support/
+  # so it's compiled to disk (standard test modules are compiled in-memory and
+  # aren't visible to peer nodes).
 
-  def run_remote(pubsub_name, listen_port, connect_port, topic, message) do
+  @doc """
+  Start a pubsub, sleep for handshake, broadcast a list of `{topic, message}`
+  pairs, then sleep briefly to let Zenoh flush before returning. Used for the
+  peer-broadcasts-to-parent direction.
+  """
+  def broadcast_remote(pubsub_name, listen_port, connect_port, broadcasts)
+      when is_list(broadcasts) do
+    start_pubsub(pubsub_name, listen_port, connect_port)
+    Process.sleep(1500)
+    Enum.each(broadcasts, fn {topic, message} ->
+      :ok = Phoenix.PubSub.broadcast(pubsub_name, topic, message)
+    end)
+    Process.sleep(500)
+    :ok
+  end
+
+  @doc """
+  Start a pubsub, subscribe to a topic, sleep for handshake, then collect up
+  to `count` messages or stop on `timeout_ms`. Used for the parent-broadcasts-
+  to-peer direction. Returns the list of messages received in arrival order.
+  """
+  def collect_remote(pubsub_name, listen_port, connect_port, topic, count, timeout_ms) do
+    start_pubsub(pubsub_name, listen_port, connect_port)
+    :ok = Phoenix.PubSub.subscribe(pubsub_name, topic)
+    Process.sleep(1500)
+    collect(count, timeout_ms, [])
+  end
+
+  defp start_pubsub(pubsub_name, listen_port, connect_port) do
     Application.ensure_all_started(:phoenix_pubsub)
     Application.ensure_all_started(:zenohex)
 
@@ -22,9 +49,16 @@ defmodule Loam.Phoenix.IntegrationHelper do
         ]
       )
 
-    Process.sleep(1500)
-    :ok = Phoenix.PubSub.broadcast(pubsub_name, topic, message)
-    Process.sleep(500)
     :ok
+  end
+
+  defp collect(0, _timeout, acc), do: Enum.reverse(acc)
+
+  defp collect(remaining, timeout, acc) do
+    receive do
+      msg -> collect(remaining - 1, timeout, [msg | acc])
+    after
+      timeout -> Enum.reverse(acc)
+    end
   end
 end

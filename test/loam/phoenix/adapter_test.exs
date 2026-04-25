@@ -35,7 +35,7 @@ defmodule Loam.Phoenix.AdapterTest do
     end
   end
 
-  test "broadcast/4 delivers to a local subscriber on the same node" do
+  test "broadcast/4 delivers to a local subscriber exactly once" do
     pubsub = :"loam_test_pubsub_#{:erlang.unique_integer([:positive])}"
     _adapter_name = start_pubsub(pubsub, 27448)
 
@@ -43,5 +43,9 @@ defmodule Loam.Phoenix.AdapterTest do
     :ok = Phoenix.PubSub.broadcast(pubsub, "room:42", {:hello, "world"})
 
     assert_receive {:hello, "world"}, 1_000
+    # If the locality filter were misconfigured, the Zenoh round-trip to our
+    # own subscription would re-dispatch via local_broadcast, producing a
+    # duplicate. This refute is the load-bearing assertion for that wiring.
+    refute_receive {:hello, "world"}, 500
   end
 end

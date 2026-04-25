@@ -14,20 +14,7 @@ PRDs and RFCs land under `docs/` as specifications stabilize.
 - Semantics first, performance later.
 - Property-based testing (StreamData) for the semantic layer. Formal methods (TLA+ or Alloy) reserved for the hardest questions.
 
-## Roadmap (rough)
-
-0. **Substrate familiarity.** Get `zenohex` running across real hardware. Break the network on purpose.
-1. **Phoenix.PubSub adapter.** First semantic decisions: topic-to-key-expression mapping, delivery guarantees.
-2. **Registry on Zenoh.** Name-to-PID becomes key-expression-to-subscribers. Wildcards, partitions, call semantics.
-3. **Supervisor semantics across partitions.**
-4. **GenServer-equivalent with Zenoh-backed mailbox.**
-5. Open.
-
 ## Prior Art
 
 - [Partisan](https://partisan.dev/) — alternative BEAM distribution, stays within a BEAM-to-BEAM frame.
 - [Zenoh](https://zenoh.io/) — the substrate this project builds on.
-
-## License
-
-TBD.

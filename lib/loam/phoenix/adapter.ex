@@ -45,8 +45,9 @@ defmodule Loam.Phoenix.Adapter do
 
   @impl true
   def broadcast(adapter_name, topic, message, dispatcher) do
-    %{pubsub_name: pubsub} = Session.fetch!(adapter_name)
-    Phoenix.PubSub.local_broadcast(pubsub, topic, message, dispatcher)
+    # Local dispatch is done by Phoenix.PubSub.broadcast/4 itself (it calls
+    # dispatch after the adapter returns). The adapter's job is only to fan
+    # out to remote nodes — same shape as Phoenix.PubSub.PG2.
     Session.publish(adapter_name, topic, message, dispatcher)
   end
 
