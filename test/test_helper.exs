@@ -1,1 +1,1 @@
-ExUnit.start(exclude: [:partition])
+ExUnit.start(exclude: [:partition, :peer_death])
