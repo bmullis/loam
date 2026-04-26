@@ -22,6 +22,44 @@ defmodule Loam.Phoenix.IntegrationHelper do
   end
 
   @doc """
+  Like `broadcast_remote/4` but assumes the pubsub is already running. No
+  startup, no handshake sleep. Used by long-lived peers that handle multiple
+  broadcast batches across iterations (e.g. property tests).
+  """
+  def broadcast_only(pubsub_name, broadcasts) when is_list(broadcasts) do
+    Enum.each(broadcasts, fn {topic, message} ->
+      :ok = Phoenix.PubSub.broadcast(pubsub_name, topic, message)
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Start a pubsub on the peer node and detach it from the calling :peer.call
+  process so it survives across multiple :peer.calls. Sleeps for handshake.
+  """
+  def start_pubsub_persistent(pubsub_name, listen_port, connect_port) do
+    Application.ensure_all_started(:phoenix_pubsub)
+    Application.ensure_all_started(:zenohex)
+
+    {:ok, sup} =
+      Phoenix.PubSub.Supervisor.start_link(
+        name: pubsub_name,
+        adapter: Loam.Phoenix.Adapter,
+        zenoh: [
+          mode: :peer,
+          listen: ["tcp/127.0.0.1:#{listen_port}"],
+          connect: ["tcp/127.0.0.1:#{connect_port}"],
+          multicast_scouting: false
+        ]
+      )
+
+    Process.unlink(sup)
+    Process.sleep(1_500)
+    :ok
+  end
+
+  @doc """
   Start a pubsub, subscribe to a topic, sleep for handshake, then collect up
   to `count` messages or stop on `timeout_ms`. Used for the parent-broadcasts-
   to-peer direction. Returns the list of messages received in arrival order.
