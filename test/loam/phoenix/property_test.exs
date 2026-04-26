@@ -26,7 +26,9 @@ defmodule Loam.Phoenix.PropertyTest do
   alias Loam.Phoenix.IntegrationHelper
 
   @peer_call_timeout 30_000
-  @drain_ms 800
+  @quiescence_ms 400
+  @drain_max_ms 8_000
+  @poll_ms 50
   @topics ["px:a", "px:b", "px:c"]
 
   @moduletag timeout: 180_000
@@ -81,7 +83,7 @@ defmodule Loam.Phoenix.PropertyTest do
           @peer_call_timeout
         )
 
-      Process.sleep(@drain_ms)
+      wait_for_quiescence(collectors)
       received = drain_collectors(collectors)
 
       for {sub_idx, sub_topics} <- Enum.with_index(subs) |> Enum.map(fn {t, i} -> {i, t} end) do
@@ -152,7 +154,10 @@ defmodule Loam.Phoenix.PropertyTest do
         spawn_link(fn ->
           Enum.each(topics, fn t -> :ok = Phoenix.PubSub.subscribe(pubsub_name, t) end)
           send(parent, {ready, :subscribed})
-          collect_loop([])
+          # Park forever; let pubsub deliveries pile up in the mailbox so
+          # the test can poll message_queue_len for quiescence without
+          # racing with a draining receive loop.
+          park_for_drain()
         end)
 
       receive do
@@ -165,13 +170,17 @@ defmodule Loam.Phoenix.PropertyTest do
     end)
   end
 
-  defp collect_loop(acc) do
+  # Park until told to drain. The receive selectively matches `:__drain__`
+  # so pubsub messages stay in the mailbox accumulating, observable via
+  # Process.info(:message_queue_len). On drain, scan the whole mailbox via
+  # Process.info(:messages) — peeking, not receiving, so we don't reorder.
+  defp park_for_drain do
     receive do
       {:__drain__, from, ref} ->
-        send(from, {ref, Enum.reverse(acc)})
-
-      msg ->
-        collect_loop([msg | acc])
+        {:messages, msgs} = Process.info(self(), :messages)
+        # Filter out the drain marker that just landed.
+        payloads = Enum.reject(msgs, &match?({:__drain__, _, _}, &1))
+        send(from, {ref, payloads})
     end
   end
 
@@ -188,6 +197,43 @@ defmodule Loam.Phoenix.PropertyTest do
         end
 
       {idx, received}
+    end)
+  end
+
+  # Wait until the sum of collector mailbox sizes has been stable for
+  # `@quiescence_ms`, or until `@drain_max_ms` elapses. Doesn't drain — it
+  # just observes message_queue_len. Replaces a fixed Process.sleep, which
+  # raced with Zenoh delivery jitter under full-suite load.
+  defp wait_for_quiescence(collectors) do
+    deadline = System.monotonic_time(:millisecond) + @drain_max_ms
+    poll_quiescence(collectors, -1, 0, deadline)
+  end
+
+  defp poll_quiescence(collectors, last_total, quiet_for, deadline) do
+    Process.sleep(@poll_ms)
+    total = mailbox_total(collectors)
+
+    cond do
+      total == last_total and quiet_for + @poll_ms >= @quiescence_ms ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        :ok
+
+      total == last_total ->
+        poll_quiescence(collectors, total, quiet_for + @poll_ms, deadline)
+
+      true ->
+        poll_quiescence(collectors, total, 0, deadline)
+    end
+  end
+
+  defp mailbox_total(collectors) do
+    Enum.reduce(collectors, 0, fn {_idx, pid, _topics}, acc ->
+      case Process.info(pid, :message_queue_len) do
+        {:message_queue_len, n} -> acc + n
+        nil -> acc
+      end
     end)
   end
 
