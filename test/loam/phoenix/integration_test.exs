@@ -16,7 +16,9 @@ defmodule Loam.Phoenix.IntegrationTest do
     {:ok, pubsub_name: pubsub_name}
   end
 
-  test "peer → parent: broadcast from peer reaches parent's subscriber", %{pubsub_name: pubsub_name} do
+  test "peer → parent: broadcast from peer reaches parent's subscriber", %{
+    pubsub_name: pubsub_name
+  } do
     parent_port = unique_port()
     child_port = unique_port()
 
@@ -42,7 +44,9 @@ defmodule Loam.Phoenix.IntegrationTest do
     end
   end
 
-  test "parent → peer: broadcast from parent reaches peer's subscriber", %{pubsub_name: pubsub_name} do
+  test "parent → peer: broadcast from parent reaches peer's subscriber", %{
+    pubsub_name: pubsub_name
+  } do
     parent_port = unique_port()
     child_port = unique_port()
 

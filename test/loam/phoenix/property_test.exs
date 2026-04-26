@@ -114,7 +114,8 @@ defmodule Loam.Phoenix.PropertyTest do
 
   defp generator do
     gen all(
-          subs <- list_of(list_of(member_of(@topics), max_length: 3), min_length: 1, max_length: 3),
+          subs <-
+            list_of(list_of(member_of(@topics), max_length: 3), min_length: 1, max_length: 3),
           pubs_count <- integer(0..6),
           pubs <-
             list_of(

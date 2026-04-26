@@ -14,9 +14,11 @@ defmodule Loam.Phoenix.IntegrationHelper do
       when is_list(broadcasts) do
     start_pubsub(pubsub_name, listen_port, connect_port)
     Process.sleep(1500)
+
     Enum.each(broadcasts, fn {topic, message} ->
       :ok = Phoenix.PubSub.broadcast(pubsub_name, topic, message)
     end)
+
     Process.sleep(500)
     :ok
   end
