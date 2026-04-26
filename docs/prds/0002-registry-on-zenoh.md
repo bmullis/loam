@@ -1,7 +1,7 @@
 ---
 id: 0002
 slug: registry-on-zenoh
-status: draft
+status: shipped
 date: 2026-04-26
 phase: 2
 related:
@@ -43,7 +43,7 @@ Eight load-bearing design decisions are fixed by this PRD. Each gets a correspon
 5. **Last-Writer-Wins conflict resolution by Lamport timestamp, ZID lexicographic tiebreak.** Each register/unregister announce carries a Lamport timestamp (per-node monotonic counter, advanced on receive). On collision, the larger timestamp wins; ties broken by lexicographic comparison of the announcing ZID. The losing side observes its own pid was evicted and sends a `{:loam_registry, :evicted, name, winner_zid}` message to the affected pid (which has been monitored).
 6. **Cross-node death detection rides PubSub's `:drop` regime.** Each `Loam.Registry` instance also subscribes to a heartbeat keyexpr and emits a heartbeat every N seconds. A peer is considered alive iff its ZID is in `peers_zid` *and* its last heartbeat is within K seconds. On peer-loss (PubSub `:drop` regime engages, `peers_zid` clears for that ZID), all entries owned by that ZID are evicted from the local mirror. Recovery is by re-announce when the peer returns; no replay.
 7. **Registry owns its own Zenoh session for Phase 2.** Forward-compatible with sharing via a `session:` config option, but the default is one session per `Loam.Registry` instance. Same reasoning as PRD-0001 Solution item 6: keep the simple case simple, leave a clean place for Phase 3+ sharing.
-8. **The wire format is the PRD-0001 envelope, version 1, payload tagged.** The `LOAM` magic + version byte + ETF envelope from PRD-0001 is reused. The payload is a tagged tuple: `{:register, name, pid, lamport, zid}`, `{:unregister, name, lamport, zid}`, `{:heartbeat, zid, lamport}`, or `{:snapshot_request, zid}` / `{:snapshot, zid, [{name, pid, lamport}, ...]}` for late-joiners. New peers issue a snapshot request on first heartbeat to bootstrap; existing peers reply with their owned entries.
+8. **The wire format is the PRD-0001 envelope, version 1, payload tagged.** The `LOAM` magic + version byte + ETF envelope from PRD-0001 is reused. The payload is a tagged tuple: `{:register, name, pid, value, lamport, zid}`, `{:unregister, name, lamport, zid}`, `{:heartbeat, zid, lamport}`, or `{:snapshot_request, zid}` / `{:snapshot, zid, [{name, pid, value, lamport}, ...]}` for late-joiners. The `value` term rides on the wire because remote `lookup/2` returns `[{pid, value}]` and the value is stored in the local mirror. New peers issue a snapshot request on first heartbeat to bootstrap; existing peers reply with their owned entries.
 
 This PRD also extends the `docs/specs/NNNN-slug/` convention: `docs/specs/0002-registry-on-zenoh/` will contain a TLA+ module characterizing the LWW conflict-resolution and eventual-consistency properties.
 
@@ -135,7 +135,7 @@ Stories:
 
 - **Wire format.** Reuses `Loam.Phoenix.Envelope` (LOAM magic + version 1 + ETF), with payload one of:
 
-  - `{:register, name_term, pid, lamport, zid}` — name claim from `zid` at logical time `lamport`
+  - `{:register, name_term, pid, value, lamport, zid}` — name claim from `zid` at logical time `lamport`
   - `{:unregister, name_term, lamport, zid}` — release
   - `{:heartbeat, zid, lamport}` — liveness ping
   - `{:snapshot_request, zid}` — late-joiner asking for owned-entries replay
