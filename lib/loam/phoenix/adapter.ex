@@ -11,7 +11,13 @@ defmodule Loam.Phoenix.Adapter do
         zenoh: [
           mode: :peer,
           listen: ["tcp/0.0.0.0:7447"],
-          connect: ["tcp/192.168.1.10:7447"]
+          connect: ["tcp/192.168.1.10:7447"],
+          # Optional escape hatch for any Zenoh config path not surfaced above.
+          # Each entry is `{json5_path, json5_value}` and is applied after the
+          # named keys. See Zenoh's config docs for the full schema.
+          raw: [
+            {"transport/link/tx/lease", "3000"}
+          ]
         ],
         namespace: "loam/phx",          # optional
         node_name: nil                  # optional; defaults to the Zenoh ZID
@@ -19,6 +25,15 @@ defmodule Loam.Phoenix.Adapter do
   Only `adapter:` and `zenoh:` are required. `direct_broadcast/5` raises —
   this PRD does not commit to a node-targeting semantic; that lives with
   the future Registry PRD.
+
+  > #### Pubsub instance name must match across BEAMs {: .warning}
+  >
+  > The keyexpr namespace is derived from `:name`. Two BEAMs with different
+  > `Phoenix.PubSub` instance names will not see each other's broadcasts even
+  > if their Zenoh sessions are peered (`peers_zid` populated). The split is
+  > silent — broadcasts succeed locally and on the wire, they just land in a
+  > different keyexpr namespace. Match `:name` on every BEAM that should share
+  > a broadcast domain.
   """
 
   @behaviour Phoenix.PubSub.Adapter

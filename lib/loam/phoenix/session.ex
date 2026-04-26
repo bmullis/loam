@@ -135,14 +135,23 @@ defmodule Loam.Phoenix.Session do
   ## Helpers
 
   defp build_zenoh_config(opts) do
+    {raw, opts} = Keyword.pop(opts, :raw, [])
     base = Zenohex.Config.default()
 
-    Enum.reduce_while(opts, {:ok, base}, fn {key, value}, {:ok, acc} ->
-      case Zenohex.Config.insert_json5(acc, json5_path(key), to_json5(value)) do
-        {:ok, updated} -> {:cont, {:ok, updated}}
-        {:error, reason} -> {:halt, {:error, {:zenoh_config, key, reason}}}
-      end
-    end)
+    with {:ok, after_named} <-
+           Enum.reduce_while(opts, {:ok, base}, fn {key, value}, {:ok, acc} ->
+             case Zenohex.Config.insert_json5(acc, json5_path(key), to_json5(value)) do
+               {:ok, updated} -> {:cont, {:ok, updated}}
+               {:error, reason} -> {:halt, {:error, {:zenoh_config, key, reason}}}
+             end
+           end) do
+      Enum.reduce_while(raw, {:ok, after_named}, fn {path, value}, {:ok, acc} ->
+        case Zenohex.Config.insert_json5(acc, path, value) do
+          {:ok, updated} -> {:cont, {:ok, updated}}
+          {:error, reason} -> {:halt, {:error, {:zenoh_config_raw, path, reason}}}
+        end
+      end)
+    end
   end
 
   defp json5_path(:mode), do: "mode"
