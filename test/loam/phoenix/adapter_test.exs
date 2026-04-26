@@ -28,7 +28,10 @@ defmodule Loam.Phoenix.AdapterTest do
 
     name = Adapter.node_name(adapter_name)
     assert is_binary(name)
-    assert byte_size(name) == 32
+    # Zenoh ZIDs are up to 16 bytes; the hex-string node_name is up to 32
+    # chars, shorter when leading nibbles are zero. Don't pin the exact size.
+    assert byte_size(name) in 1..32
+    assert name =~ ~r/\A[0-9a-f]+\z/
 
     assert_raise ArgumentError, ~r/does not support direct_broadcast/, fn ->
       Adapter.direct_broadcast(adapter_name, "anywhere", "topic", :msg, Phoenix.PubSub)
