@@ -1,7 +1,7 @@
 ---
 id: 0001
 slug: phoenix-pubsub-adapter
-status: draft
+status: shipped
 date: 2026-04-24
 phase: 1
 related:
