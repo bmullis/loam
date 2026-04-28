@@ -17,14 +17,14 @@ See parent PRD §Solution decision 2 for the semantic.
 
 ## Acceptance criteria
 
-- [ ] `:debounce_ms` option accepted by `monitor/3`; default 0 preserves slice 0001 behavior.
-- [ ] Peaceful handoff (unregister followed by register within `debounce_ms`) suppresses notification.
-- [ ] Hostile handoff (unregister with no replacement within window) fires notification exactly once.
-- [ ] Rapid churn (multiple owner transitions inside the window) does not produce duplicate or lost notifications; debounce timer is correctly canceled and rescheduled.
-- [ ] Watcher pid dying mid-debounce does not leak the timer.
-- [ ] Unit tests cover peaceful handoff, hostile handoff, churn, and watcher-death-mid-debounce.
-- [ ] Property test: "watcher receives exactly one `:name_vacant` per owned→vacant edge that exceeds the debounce window."
-- [ ] Decision journal entry written for "vacancy debounce window as default-on for Singleton consumers."
+- [x] `:debounce_ms` option accepted by `monitor/3`; default 0 preserves slice 0001 behavior.
+- [x] Peaceful handoff (unregister followed by register within `debounce_ms`) suppresses notification.
+- [x] Hostile handoff (unregister with no replacement within window) fires notification exactly once.
+- [x] Rapid churn (multiple owner transitions inside the window) does not produce duplicate or lost notifications; debounce timer is correctly canceled and rescheduled.
+- [x] Watcher pid dying mid-debounce does not leak the timer.
+- [x] Unit tests cover peaceful handoff, hostile handoff, churn, and watcher-death-mid-debounce.
+- [x] Property test: "watcher receives exactly one `:name_vacant` per owned→vacant edge that exceeds the debounce window."
+- [x] Decision journal entry written for "vacancy debounce window as default-on for Singleton consumers."
 
 ## User stories addressed
 

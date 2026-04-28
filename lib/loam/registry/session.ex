@@ -177,6 +177,7 @@ defmodule Loam.Registry.Session do
           {:applied, :new} ->
             state = track(state, pid, name)
             state = publish_register(state, name, pid, value, ts)
+            state = notify_owned(state, name)
             {:reply, :ok, state}
 
           other ->
@@ -210,8 +211,8 @@ defmodule Loam.Registry.Session do
     end
   end
 
-  def handle_call({:monitor, name, watcher_pid, _opts}, _from, state) do
-    {ref, state} = install_watcher(state, name, watcher_pid)
+  def handle_call({:monitor, name, watcher_pid, opts}, _from, state) do
+    {ref, state} = install_watcher(state, name, watcher_pid, opts)
     {:reply, {:ok, ref}, state}
   end
 
@@ -223,6 +224,11 @@ defmodule Loam.Registry.Session do
   def handle_info({:DOWN, mref, :process, pid, _reason}, state) do
     state = drop_watchers_for_dead_pid(state, mref, pid)
     state = drop_registrations_for_dead_pid(state, pid)
+    {:noreply, state}
+  end
+
+  def handle_info({:debounce_fire, ref}, state) do
+    state = handle_debounce_fire(state, ref)
     {:noreply, state}
   end
 
@@ -279,7 +285,10 @@ defmodule Loam.Registry.Session do
     case Mirror.apply_register(state.table, name, pid, value, lamport, sender_zid) do
       {:applied, {:evicted, evicted_pid, _evicted_zid}} ->
         send_eviction(evicted_pid, name, sender_zid)
-        state
+        notify_owned(state, name)
+
+      {:applied, :new} ->
+        notify_owned(state, name)
 
       _ ->
         state
@@ -312,8 +321,11 @@ defmodule Loam.Registry.Session do
 
     Enum.reduce(entries, state, fn {name, pid, value, lamport}, st ->
       st = observe(st, lamport)
-      _ = Mirror.apply_register(st.table, name, pid, value, lamport, sender_zid)
-      st
+
+      case Mirror.apply_register(st.table, name, pid, value, lamport, sender_zid) do
+        {:applied, _} -> notify_owned(st, name)
+        _ -> st
+      end
     end)
   end
 
@@ -498,24 +510,42 @@ defmodule Loam.Registry.Session do
   end
 
   ## Watcher bookkeeping (monitor/2)
+  #
+  # State shape:
+  #   watchers_by_name :: %{name => MapSet.t(ref)}
+  #   watcher_meta     :: %{ref => %{pid: pid, name: term, debounce_ms: int, timer: tref | nil}}
+  #   watcher_pids     :: %{watcher_pid => {monitor_ref, MapSet.t(ref)}}
+  #
+  # Debounce semantic: when an owned->vacant edge is observed for `name`, each
+  # watcher of that name with `debounce_ms > 0` schedules a timer; the
+  # `:name_vacant` message is sent only when the timer fires AND the name is
+  # still vacant in the local mirror at fire time. If a new owner appears
+  # before the timer fires, `notify_owned/2` cancels the pending timer.
 
-  defp install_watcher(state, name, watcher_pid) do
+  defp install_watcher(state, name, watcher_pid, opts) do
     ref = make_ref()
+    debounce_ms = validate_debounce(Keyword.get(opts, :debounce_ms, 0))
 
-    {watcher_pids, _new?} =
+    watcher_pids =
       case Map.fetch(state.watcher_pids, watcher_pid) do
         {:ok, {mref, refs}} ->
-          {Map.put(state.watcher_pids, watcher_pid, {mref, MapSet.put(refs, ref)}), false}
+          Map.put(state.watcher_pids, watcher_pid, {mref, MapSet.put(refs, ref)})
 
         :error ->
           mref = Process.monitor(watcher_pid)
-          {Map.put(state.watcher_pids, watcher_pid, {mref, MapSet.new([ref])}), true}
+          Map.put(state.watcher_pids, watcher_pid, {mref, MapSet.new([ref])})
       end
 
     watchers_by_name =
       Map.update(state.watchers_by_name, name, MapSet.new([ref]), &MapSet.put(&1, ref))
 
-    watcher_meta = Map.put(state.watcher_meta, ref, {watcher_pid, name})
+    watcher_meta =
+      Map.put(state.watcher_meta, ref, %{
+        pid: watcher_pid,
+        name: name,
+        debounce_ms: debounce_ms,
+        timer: nil
+      })
 
     {ref,
      %{
@@ -526,25 +556,18 @@ defmodule Loam.Registry.Session do
      }}
   end
 
+  defp validate_debounce(ms) when is_integer(ms) and ms >= 0, do: ms
+  defp validate_debounce(_), do: 0
+
   defp remove_watcher(state, ref) do
     case Map.fetch(state.watcher_meta, ref) do
       :error ->
         state
 
-      {:ok, {watcher_pid, name}} ->
-        watchers_by_name =
-          case Map.fetch(state.watchers_by_name, name) do
-            {:ok, refs} ->
-              refs = MapSet.delete(refs, ref)
-              if MapSet.size(refs) == 0,
-                do: Map.delete(state.watchers_by_name, name),
-                else: Map.put(state.watchers_by_name, name, refs)
-
-            :error ->
-              state.watchers_by_name
-          end
-
-        watcher_meta = Map.delete(state.watcher_meta, ref)
+      {:ok, %{pid: watcher_pid, name: name, timer: timer}} ->
+        cancel_timer(timer)
+        state = drop_ref_from_name_index(state, ref, name)
+        state = %{state | watcher_meta: Map.delete(state.watcher_meta, ref)}
 
         watcher_pids =
           case Map.fetch(state.watcher_pids, watcher_pid) do
@@ -562,20 +585,16 @@ defmodule Loam.Registry.Session do
               state.watcher_pids
           end
 
-        %{
-          state
-          | watchers_by_name: watchers_by_name,
-            watcher_meta: watcher_meta,
-            watcher_pids: watcher_pids
-        }
+        %{state | watcher_pids: watcher_pids}
     end
   end
 
   defp drop_watchers_for_dead_pid(state, mref, pid) do
     case Map.fetch(state.watcher_pids, pid) do
       {:ok, {^mref, refs}} ->
-        Enum.reduce(refs, %{state | watcher_pids: Map.delete(state.watcher_pids, pid)}, fn ref,
-                                                                                           st ->
+        state = %{state | watcher_pids: Map.delete(state.watcher_pids, pid)}
+
+        Enum.reduce(refs, state, fn ref, st ->
           # Skip Process.demonitor (the monitor already fired) and skip
           # touching watcher_pids again — we cleared it above.
           remove_watcher_entry(st, ref)
@@ -591,25 +610,28 @@ defmodule Loam.Registry.Session do
       :error ->
         state
 
-      {:ok, {_pid, name}} ->
-        watchers_by_name =
-          case Map.fetch(state.watchers_by_name, name) do
-            {:ok, refs} ->
-              refs = MapSet.delete(refs, ref)
-              if MapSet.size(refs) == 0,
-                do: Map.delete(state.watchers_by_name, name),
-                else: Map.put(state.watchers_by_name, name, refs)
-
-            :error ->
-              state.watchers_by_name
-          end
-
-        %{
-          state
-          | watchers_by_name: watchers_by_name,
-            watcher_meta: Map.delete(state.watcher_meta, ref)
-        }
+      {:ok, %{name: name, timer: timer}} ->
+        cancel_timer(timer)
+        state = drop_ref_from_name_index(state, ref, name)
+        %{state | watcher_meta: Map.delete(state.watcher_meta, ref)}
     end
+  end
+
+  defp drop_ref_from_name_index(state, ref, name) do
+    watchers_by_name =
+      case Map.fetch(state.watchers_by_name, name) do
+        {:ok, refs} ->
+          refs = MapSet.delete(refs, ref)
+
+          if MapSet.size(refs) == 0,
+            do: Map.delete(state.watchers_by_name, name),
+            else: Map.put(state.watchers_by_name, name, refs)
+
+        :error ->
+          state.watchers_by_name
+      end
+
+    %{state | watchers_by_name: watchers_by_name}
   end
 
   defp notify_vacant(state, name) do
@@ -618,18 +640,74 @@ defmodule Loam.Registry.Session do
         state
 
       {:ok, refs} ->
-        Enum.each(refs, fn ref ->
-          case Map.fetch(state.watcher_meta, ref) do
-            {:ok, {watcher_pid, ^name}} ->
-              send(watcher_pid, {:loam_registry, :name_vacant, state.name, name})
+        Enum.reduce(refs, state, fn ref, st -> schedule_or_send_vacant(st, ref, name) end)
+    end
+  end
+
+  defp schedule_or_send_vacant(state, ref, name) do
+    case Map.fetch(state.watcher_meta, ref) do
+      :error ->
+        state
+
+      {:ok, %{debounce_ms: 0, pid: pid}} ->
+        send(pid, {:loam_registry, :name_vacant, state.name, name})
+        state
+
+      {:ok, %{timer: tref}} when tref != nil ->
+        # Already pending — preserve the original edge's schedule (rapid
+        # vacant→owned→vacant churn does not extend or duplicate).
+        state
+
+      {:ok, %{debounce_ms: ms} = meta} ->
+        tref = Process.send_after(self(), {:debounce_fire, ref}, ms)
+        meta = Map.put(meta, :timer, tref)
+        %{state | watcher_meta: Map.put(state.watcher_meta, ref, meta)}
+    end
+  end
+
+  defp notify_owned(state, name) do
+    case Map.fetch(state.watchers_by_name, name) do
+      :error ->
+        state
+
+      {:ok, refs} ->
+        Enum.reduce(refs, state, fn ref, st ->
+          case Map.fetch(st.watcher_meta, ref) do
+            {:ok, %{timer: tref} = meta} when tref != nil ->
+              cancel_timer(tref)
+              meta = Map.put(meta, :timer, nil)
+              %{st | watcher_meta: Map.put(st.watcher_meta, ref, meta)}
 
             _ ->
-              :ok
+              st
           end
         end)
+    end
+  end
+
+  defp handle_debounce_fire(state, ref) do
+    case Map.fetch(state.watcher_meta, ref) do
+      {:ok, %{pid: pid, name: name, timer: tref} = meta} when tref != nil ->
+        meta = Map.put(meta, :timer, nil)
+        state = %{state | watcher_meta: Map.put(state.watcher_meta, ref, meta)}
+
+        case Mirror.lookup(state.table, name) do
+          [] -> send(pid, {:loam_registry, :name_vacant, state.name, name})
+          _ -> :ok
+        end
 
         state
+
+      _ ->
+        state
     end
+  end
+
+  defp cancel_timer(nil), do: :ok
+
+  defp cancel_timer(tref) do
+    _ = Process.cancel_timer(tref, async: true, info: false)
+    :ok
   end
 
   defp synthesize_local_zid(name) do
