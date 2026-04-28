@@ -94,6 +94,16 @@ defmodule Loam.Registry.Session do
     GenServer.call(server, {:unregister, name})
   end
 
+  @spec monitor(GenServer.server(), name(), pid(), keyword()) :: {:ok, reference()}
+  def monitor(server, name, watcher_pid, opts) when is_pid(watcher_pid) do
+    GenServer.call(server, {:monitor, name, watcher_pid, opts})
+  end
+
+  @spec demonitor(GenServer.server(), reference()) :: :ok
+  def demonitor(server, ref) when is_reference(ref) do
+    GenServer.call(server, {:demonitor, ref})
+  end
+
   ## GenServer
 
   @impl true
@@ -118,6 +128,9 @@ defmodule Loam.Registry.Session do
       lamport: Lamport.new(),
       monitors: %{},
       peers: %{},
+      watchers_by_name: %{},
+      watcher_meta: %{},
+      watcher_pids: %{},
       heartbeat_interval_ms: heartbeat_interval_ms,
       heartbeat_misses: heartbeat_misses,
       session_id: nil,
@@ -185,6 +198,7 @@ defmodule Loam.Registry.Session do
           :applied ->
             state = untrack(state, pid, name)
             state = publish_unregister(state, name, ts)
+            state = notify_vacant(state, name)
             {:reply, :ok, state}
 
           :rejected ->
@@ -196,26 +210,20 @@ defmodule Loam.Registry.Session do
     end
   end
 
+  def handle_call({:monitor, name, watcher_pid, _opts}, _from, state) do
+    {ref, state} = install_watcher(state, name, watcher_pid)
+    {:reply, {:ok, ref}, state}
+  end
+
+  def handle_call({:demonitor, ref}, _from, state) do
+    {:reply, :ok, remove_watcher(state, ref)}
+  end
+
   @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    case Map.fetch(state.monitors, pid) do
-      :error ->
-        {:noreply, state}
-
-      {:ok, {_ref, names}} ->
-        state =
-          Enum.reduce(names, state, fn name, st ->
-            {ts, lamport} = Lamport.tick(st.lamport)
-            st = %{st | lamport: lamport}
-
-            case Mirror.apply_unregister(st.table, name, ts, st.zid) do
-              :applied -> publish_unregister(st, name, ts)
-              _ -> st
-            end
-          end)
-
-        {:noreply, %{state | monitors: Map.delete(state.monitors, pid)}}
-    end
+  def handle_info({:DOWN, mref, :process, pid, _reason}, state) do
+    state = drop_watchers_for_dead_pid(state, mref, pid)
+    state = drop_registrations_for_dead_pid(state, pid)
+    {:noreply, state}
   end
 
   def handle_info(%Zenohex.Sample{} = sample, state) do
@@ -280,8 +288,11 @@ defmodule Loam.Registry.Session do
 
   defp apply_inbound({:unregister, name, lamport, sender_zid}, state) do
     state = observe(state, lamport)
-    _ = Mirror.apply_unregister(state.table, name, lamport, sender_zid)
-    state
+
+    case Mirror.apply_unregister(state.table, name, lamport, sender_zid) do
+      :applied -> notify_vacant(state, name)
+      _ -> state
+    end
   end
 
   defp apply_inbound({:heartbeat, sender_zid, lamport}, state) do
@@ -461,6 +472,166 @@ defmodule Loam.Registry.Session do
     end
   end
 
+  defp drop_registrations_for_dead_pid(state, pid) do
+    case Map.fetch(state.monitors, pid) do
+      :error ->
+        state
+
+      {:ok, {_ref, names}} ->
+        state =
+          Enum.reduce(names, state, fn name, st ->
+            {ts, lamport} = Lamport.tick(st.lamport)
+            st = %{st | lamport: lamport}
+
+            case Mirror.apply_unregister(st.table, name, ts, st.zid) do
+              :applied ->
+                st = publish_unregister(st, name, ts)
+                notify_vacant(st, name)
+
+              _ ->
+                st
+            end
+          end)
+
+        %{state | monitors: Map.delete(state.monitors, pid)}
+    end
+  end
+
+  ## Watcher bookkeeping (monitor/2)
+
+  defp install_watcher(state, name, watcher_pid) do
+    ref = make_ref()
+
+    {watcher_pids, _new?} =
+      case Map.fetch(state.watcher_pids, watcher_pid) do
+        {:ok, {mref, refs}} ->
+          {Map.put(state.watcher_pids, watcher_pid, {mref, MapSet.put(refs, ref)}), false}
+
+        :error ->
+          mref = Process.monitor(watcher_pid)
+          {Map.put(state.watcher_pids, watcher_pid, {mref, MapSet.new([ref])}), true}
+      end
+
+    watchers_by_name =
+      Map.update(state.watchers_by_name, name, MapSet.new([ref]), &MapSet.put(&1, ref))
+
+    watcher_meta = Map.put(state.watcher_meta, ref, {watcher_pid, name})
+
+    {ref,
+     %{
+       state
+       | watchers_by_name: watchers_by_name,
+         watcher_meta: watcher_meta,
+         watcher_pids: watcher_pids
+     }}
+  end
+
+  defp remove_watcher(state, ref) do
+    case Map.fetch(state.watcher_meta, ref) do
+      :error ->
+        state
+
+      {:ok, {watcher_pid, name}} ->
+        watchers_by_name =
+          case Map.fetch(state.watchers_by_name, name) do
+            {:ok, refs} ->
+              refs = MapSet.delete(refs, ref)
+              if MapSet.size(refs) == 0,
+                do: Map.delete(state.watchers_by_name, name),
+                else: Map.put(state.watchers_by_name, name, refs)
+
+            :error ->
+              state.watchers_by_name
+          end
+
+        watcher_meta = Map.delete(state.watcher_meta, ref)
+
+        watcher_pids =
+          case Map.fetch(state.watcher_pids, watcher_pid) do
+            {:ok, {mref, refs}} ->
+              refs = MapSet.delete(refs, ref)
+
+              if MapSet.size(refs) == 0 do
+                Process.demonitor(mref, [:flush])
+                Map.delete(state.watcher_pids, watcher_pid)
+              else
+                Map.put(state.watcher_pids, watcher_pid, {mref, refs})
+              end
+
+            :error ->
+              state.watcher_pids
+          end
+
+        %{
+          state
+          | watchers_by_name: watchers_by_name,
+            watcher_meta: watcher_meta,
+            watcher_pids: watcher_pids
+        }
+    end
+  end
+
+  defp drop_watchers_for_dead_pid(state, mref, pid) do
+    case Map.fetch(state.watcher_pids, pid) do
+      {:ok, {^mref, refs}} ->
+        Enum.reduce(refs, %{state | watcher_pids: Map.delete(state.watcher_pids, pid)}, fn ref,
+                                                                                           st ->
+          # Skip Process.demonitor (the monitor already fired) and skip
+          # touching watcher_pids again — we cleared it above.
+          remove_watcher_entry(st, ref)
+        end)
+
+      _ ->
+        state
+    end
+  end
+
+  defp remove_watcher_entry(state, ref) do
+    case Map.fetch(state.watcher_meta, ref) do
+      :error ->
+        state
+
+      {:ok, {_pid, name}} ->
+        watchers_by_name =
+          case Map.fetch(state.watchers_by_name, name) do
+            {:ok, refs} ->
+              refs = MapSet.delete(refs, ref)
+              if MapSet.size(refs) == 0,
+                do: Map.delete(state.watchers_by_name, name),
+                else: Map.put(state.watchers_by_name, name, refs)
+
+            :error ->
+              state.watchers_by_name
+          end
+
+        %{
+          state
+          | watchers_by_name: watchers_by_name,
+            watcher_meta: Map.delete(state.watcher_meta, ref)
+        }
+    end
+  end
+
+  defp notify_vacant(state, name) do
+    case Map.fetch(state.watchers_by_name, name) do
+      :error ->
+        state
+
+      {:ok, refs} ->
+        Enum.each(refs, fn ref ->
+          case Map.fetch(state.watcher_meta, ref) do
+            {:ok, {watcher_pid, ^name}} ->
+              send(watcher_pid, {:loam_registry, :name_vacant, state.name, name})
+
+            _ ->
+              :ok
+          end
+        end)
+
+        state
+    end
+  end
+
   defp synthesize_local_zid(name) do
     "local-" <>
       to_string(name) <> "-" <> Integer.to_string(:erlang.unique_integer([:positive]))
@@ -497,12 +668,16 @@ defmodule Loam.Registry.Session do
         MapSet.member?(zenoh_peers, zid) and now - last <= window
       end)
 
-    Enum.each(dead, fn {zid, _} ->
-      _ = Mirror.apply_eviction(state.table, zid)
-    end)
+    state =
+      Enum.reduce(dead, state, fn {zid, _}, st ->
+        evicted = Mirror.apply_eviction(st.table, zid)
+        Enum.reduce(evicted, st, fn {name, _pid, _v, _l}, st2 -> notify_vacant(st2, name) end)
+      end)
 
     %{state | peers: Map.new(alive)}
   end
+
+  defp current_peers_zid(%{session_id: nil}), do: []
 
   defp current_peers_zid(state) do
     case Zenohex.Session.info(state.session_id) do

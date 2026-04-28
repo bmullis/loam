@@ -16,6 +16,12 @@ defmodule Loam.Registry do
       The losing pid receives `{:loam_registry, :evicted, name, winner_zid}`.
     * Names are arbitrary Erlang terms; `value` is any term and rides the
       wire alongside the registration.
+    * `monitor/3` subscribes the calling pid to owned→vacant transitions on
+      a name. The watcher receives
+      `{:loam_registry, :name_vacant, registry, name}` on every transition
+      observed by the local mirror — local unregister, remote unregister,
+      peer-loss eviction, or LWW eviction of the last claimant. See PRD-0003
+      and `docs/journal/2026-04-27-registry-monitor-as-deep-module-decision.md`.
 
   See `docs/prds/0002-registry-on-zenoh.md` for the full semantic.
   """
@@ -24,6 +30,7 @@ defmodule Loam.Registry do
 
   @type registry :: atom() | pid()
   @type name :: term()
+  @type monitor_ref :: reference()
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
   def child_spec(opts), do: Session.child_spec(opts)
@@ -76,6 +83,43 @@ defmodule Loam.Registry do
     case resolve_table(registry) do
       {:ok, table} -> Mirror.count(table)
       :error -> 0
+    end
+  end
+
+  @doc """
+  Subscribe the calling pid to owned→vacant transitions on `name`.
+
+  Returns `{:ok, ref}`. The watcher pid receives
+  `{:loam_registry, :name_vacant, registry, name}` on every owned→vacant
+  transition observed by the local mirror — local unregister, remote
+  unregister, peer-loss eviction, or LWW eviction of the last claimant.
+
+  Options:
+
+    * `:debounce_ms` (default `0`) — added in slice 0002. The PRD-0003
+      vacancy debounce window. `0` means fire immediately.
+
+  The watcher entry is removed automatically when the watcher pid dies.
+  Notifications are not delivered for transitions that occurred before the
+  monitor was installed.
+  """
+  @spec monitor(registry(), name(), keyword()) ::
+          {:ok, monitor_ref()} | {:error, :no_such_registry}
+  def monitor(registry, name, opts \\ []) do
+    case resolve(registry) do
+      {:ok, server} -> Session.monitor(server, name, self(), opts)
+      :error -> {:error, :no_such_registry}
+    end
+  end
+
+  @doc """
+  Stop watching `name`. Idempotent on unknown refs.
+  """
+  @spec demonitor(registry(), monitor_ref()) :: :ok
+  def demonitor(registry, ref) when is_reference(ref) do
+    case resolve(registry) do
+      {:ok, server} -> Session.demonitor(server, ref)
+      :error -> :ok
     end
   end
 
