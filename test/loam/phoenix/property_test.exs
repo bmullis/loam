@@ -27,7 +27,7 @@ defmodule Loam.Phoenix.PropertyTest do
 
   @peer_call_timeout 30_000
   @quiescence_ms 400
-  @drain_max_ms 8_000
+  @drain_max_ms 30_000
   @poll_ms 50
   @topics ["px:a", "px:b", "px:c"]
 
@@ -74,6 +74,13 @@ defmodule Loam.Phoenix.PropertyTest do
 
       collectors = start_collectors(pubsub_name, subs)
 
+      expected_counts =
+        Enum.with_index(subs)
+        |> Enum.map(fn {sub_topics, idx} ->
+          {idx, Enum.count(pubs, fn {topic, _p} -> topic in sub_topics end)}
+        end)
+        |> Map.new()
+
       :ok =
         :peer.call(
           peer,
@@ -83,7 +90,7 @@ defmodule Loam.Phoenix.PropertyTest do
           @peer_call_timeout
         )
 
-      wait_for_quiescence(collectors)
+      wait_for_quiescence(collectors, expected_counts)
       received = drain_collectors(collectors)
 
       for {sub_idx, sub_topics} <- Enum.with_index(subs) |> Enum.map(fn {t, i} -> {i, t} end) do
@@ -200,39 +207,52 @@ defmodule Loam.Phoenix.PropertyTest do
     end)
   end
 
-  # Wait until the sum of collector mailbox sizes has been stable for
-  # `@quiescence_ms`, or until `@drain_max_ms` elapses. Doesn't drain — it
-  # just observes message_queue_len. Replaces a fixed Process.sleep, which
-  # raced with Zenoh delivery jitter under full-suite load.
-  defp wait_for_quiescence(collectors) do
+  # Wait until every collector has received at least its expected number
+  # of messages AND the total mailbox count has been stable for
+  # `@quiescence_ms`. The two conditions together close both directions of
+  # the flake:
+  #
+  #   * Without the count check: a single inter-message gap longer than
+  #     `@quiescence_ms` looks like quiescence and the test asserts on a
+  #     short drain.
+  #   * Without the quiescence check: late duplicates would not be
+  #     observed before the assert ran.
+  #
+  # If `@drain_max_ms` is exhausted before both conditions hold, fall
+  # through. The assert that follows will fail with a real diff — that's
+  # the right outcome under genuine load: better a failed test than a
+  # silently-truncated one.
+  defp wait_for_quiescence(collectors, expected_counts) do
     deadline = System.monotonic_time(:millisecond) + @drain_max_ms
-    poll_quiescence(collectors, -1, 0, deadline)
+    poll_quiescence(collectors, expected_counts, -1, 0, deadline)
   end
 
-  defp poll_quiescence(collectors, last_total, quiet_for, deadline) do
+  defp poll_quiescence(collectors, expected_counts, last_total, quiet_for, deadline) do
     Process.sleep(@poll_ms)
-    total = mailbox_total(collectors)
+    counts = mailbox_counts(collectors)
+    total = Enum.reduce(counts, 0, fn {_, n}, acc -> acc + n end)
+    enough? = Enum.all?(expected_counts, fn {idx, want} -> Map.get(counts, idx, 0) >= want end)
 
     cond do
-      total == last_total and quiet_for + @poll_ms >= @quiescence_ms ->
+      enough? and total == last_total and quiet_for + @poll_ms >= @quiescence_ms ->
         :ok
 
       System.monotonic_time(:millisecond) > deadline ->
         :ok
 
       total == last_total ->
-        poll_quiescence(collectors, total, quiet_for + @poll_ms, deadline)
+        poll_quiescence(collectors, expected_counts, total, quiet_for + @poll_ms, deadline)
 
       true ->
-        poll_quiescence(collectors, total, 0, deadline)
+        poll_quiescence(collectors, expected_counts, total, 0, deadline)
     end
   end
 
-  defp mailbox_total(collectors) do
-    Enum.reduce(collectors, 0, fn {_idx, pid, _topics}, acc ->
+  defp mailbox_counts(collectors) do
+    Map.new(collectors, fn {idx, pid, _topics} ->
       case Process.info(pid, :message_queue_len) do
-        {:message_queue_len, n} -> acc + n
-        nil -> acc
+        {:message_queue_len, n} -> {idx, n}
+        nil -> {idx, 0}
       end
     end)
   end
