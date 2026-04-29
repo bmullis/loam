@@ -139,6 +139,126 @@ defmodule Loam.AnchorIntegrationTest do
     end
   end
 
+  describe "max-restarts cross-Session failover" do
+    test "owner exhausts max-restarts; peer observes :name_vacant and takes over" do
+      # Attach :evicted telemetry first so we can stop A as soon as its
+      # max-restarts exhausts (otherwise A re-races B for the vacant name).
+      attach_telemetry([[:loam, :anchor, :evicted]])
+
+      cluster = :"anchor_cluster_#{System.unique_integer([:positive])}"
+      proc_a = :"anchor_sess_a_#{System.unique_integer([:positive])}"
+      proc_b = :"anchor_sess_b_#{System.unique_integer([:positive])}"
+
+      port_a = unique_port()
+      port_b = unique_port()
+
+      start_session(cluster, proc_a, port_a, [port_b])
+      start_session(cluster, proc_b, port_b, [port_a])
+      Process.sleep(@handshake_ms)
+
+      # A starts first with max_restarts: 0 (one crash → unregister).
+      {:ok, anchor_a} =
+        Anchor.start_link(
+          registry: proc_a,
+          name: :svc,
+          child_spec: {AnchorWorker, [report_to: self()]},
+          start_jitter_ms: 0,
+          vacancy_debounce_ms: 200,
+          max_restarts: 0,
+          max_seconds: 1
+        )
+
+      Process.unlink(anchor_a)
+
+      # Wait for A to register.
+      assert wait_until(
+               fn ->
+                 case Registry.lookup(proc_a, :svc) do
+                   [{^anchor_a, _}] -> true
+                   _ -> false
+                 end
+               end,
+               3_000
+             )
+
+      # B starts with healthy max_restarts; will sit in standby with monitor.
+      {:ok, anchor_b} =
+        Anchor.start_link(
+          registry: proc_b,
+          name: :svc,
+          child_spec: {AnchorWorker, [report_to: self()]},
+          start_jitter_ms: 0,
+          vacancy_debounce_ms: 200,
+          max_restarts: 3,
+          max_seconds: 5
+        )
+
+      Process.unlink(anchor_b)
+
+      on_exit(fn ->
+        for p <- [anchor_a, anchor_b] do
+          try do
+            if Process.alive?(p), do: GenServer.stop(p, :normal, 5_000)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # B observes A's ownership.
+      assert wait_until(
+               fn ->
+                 case Registry.lookup(proc_b, :svc) do
+                   [{^anchor_a, _}] -> true
+                   _ -> false
+                 end
+               end,
+               3_000
+             )
+
+      # Crash A's child. With max_restarts: 0, LocalSup gives up immediately.
+      [{^anchor_a, a_child}] = Registry.lookup(proc_a, :svc)
+      Process.exit(a_child, :kill)
+
+      # As soon as A reports :evicted (reason: :owner_lost_locally), stop A
+      # so it does not re-race B for the now-vacant name.
+      assert_receive {:telemetry, [:loam, :anchor, :evicted], _,
+                      %{reason: :owner_lost_locally}},
+                     3_000
+
+      try do
+        GenServer.stop(anchor_a, :normal, 1_000)
+      catch
+        :exit, _ -> :ok
+      end
+
+      # B should observe the vacancy and take over.
+      assert wait_until(
+               fn ->
+                 case Registry.lookup(proc_b, :svc) do
+                   [{^anchor_b, c}] when is_pid(c) -> true
+                   _ -> false
+                 end
+               end,
+               5_000
+             ),
+             "expected B to take over after A's max-restarts exhaustion"
+
+      [{^anchor_b, b_child}] = Registry.lookup(proc_b, :svc)
+      assert Process.alive?(b_child)
+    end
+  end
+
+  defp wait_until(fun, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    Stream.repeatedly(fn ->
+      Process.sleep(50)
+      fun.()
+    end)
+    |> Enum.find(fn r -> r or System.monotonic_time(:millisecond) > deadline end) || false
+  end
+
   describe "LWW eviction telemetry" do
     test "loser fires :evicted with reason :lww_lost; child terminate/2 ran" do
       cluster = :"anchor_cluster_#{System.unique_integer([:positive])}"
