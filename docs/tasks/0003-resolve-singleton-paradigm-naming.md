@@ -1,9 +1,12 @@
 ---
-status: todo
+status: done
 type: HITL
 created: 2026-04-26
-parent_prd: docs/prds/0003-singleton-on-zenoh.md
+completed: 2026-04-28
+parent_prd: docs/prds/0003-anchor-on-zenoh.md
 ---
+
+**Decision: `Loam.Anchor`.** Reasoning recorded in `docs/journal/2026-04-26-singleton-paradigm-naming-question.md` (promoted to `kind: decision`). PRD slug, spec directory, downstream task files, telemetry namespace, and module names all updated.
 
 ## What to build
 
@@ -15,11 +18,11 @@ This is HITL because it is an interview/decision moment, not autonomous work. Br
 
 ## Acceptance criteria
 
-- [ ] Final module name selected and recorded.
-- [ ] Naming-question journal entry promoted to `kind: decision` with the reasoning behind the chosen name.
-- [ ] Parent PRD updated: `Loam.Singleton` placeholder replaced throughout, slug renamed if applicable.
-- [ ] Downstream task files (slices 0004+) updated with the chosen name.
-- [ ] If the slug changes, related TLA+ spec directory name is also updated.
+- [x] Final module name selected and recorded.
+- [x] Naming-question journal entry promoted to `kind: decision` with the reasoning behind the chosen name.
+- [x] Parent PRD updated: `Loam.Singleton` placeholder replaced throughout, slug renamed if applicable.
+- [x] Downstream task files (slices 0004+) updated with the chosen name.
+- [x] If the slug changes, related TLA+ spec directory name is also updated.
 
 ## User stories addressed
 

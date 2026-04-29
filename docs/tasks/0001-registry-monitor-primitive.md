@@ -3,14 +3,14 @@ status: done
 type: AFK
 created: 2026-04-26
 completed: 2026-04-27
-parent_prd: docs/prds/0003-singleton-on-zenoh.md
+parent_prd: docs/prds/0003-anchor-on-zenoh.md
 ---
 
 ## What to build
 
 Add `Loam.Registry.monitor/3` and `Loam.Registry.demonitor/2` to the Registry's public surface, with `:debounce_ms` defaulting to 0 (immediate fire). The watcher's calling pid receives `{:loam_registry, :name_vacant, registry, name}` on every owned→vacant transition observed by the local mirror, regardless of cause (local unregister, remote unregister, peer-loss eviction, LWW eviction of the last claimant). Watchers are auto-removed when the watcher pid dies.
 
-This is the deep module that future loam primitives (Singleton, failover groups, leader election) consume. Debounce is added in slice 0002 — this slice ships the immediate-fire path only.
+This is the deep module that future loam primitives (Anchor, failover groups, leader election) consume. Debounce is added in slice 0002 — this slice ships the immediate-fire path only.
 
 See parent PRD §Solution decision 2 and §Implementation Decisions for module shape.
 

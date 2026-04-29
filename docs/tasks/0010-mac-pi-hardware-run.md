@@ -2,7 +2,7 @@
 status: todo
 type: HITL
 created: 2026-04-26
-parent_prd: docs/prds/0003-singleton-on-zenoh.md
+parent_prd: docs/prds/0003-anchor-on-zenoh.md
 blocked_by:
   - docs/tasks/0006-partition-lww-eviction.md
   - docs/tasks/0007-peer-death-failover.md

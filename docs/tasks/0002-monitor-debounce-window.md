@@ -1,8 +1,9 @@
 ---
-status: todo
+status: done
 type: AFK
 created: 2026-04-26
-parent_prd: docs/prds/0003-singleton-on-zenoh.md
+completed: 2026-04-28
+parent_prd: docs/prds/0003-anchor-on-zenoh.md
 blocked_by:
   - docs/tasks/0001-registry-monitor-primitive.md
 ---
@@ -11,7 +12,7 @@ blocked_by:
 
 Extend `Loam.Registry.monitor/3` with a `:debounce_ms` option (default 0 stays as the no-debounce behavior shipped in slice 0001). When `:debounce_ms > 0`, an owned→vacant transition starts a timer; the `:name_vacant` notification fires only if the name remains vacant for the full window. If a new owner is observed within the window, the pending notification is suppressed. Cancellation must be safe under rapid owner churn.
 
-This absorbs the "owner A unregisters, owner B registers 50ms later" peaceful-handoff case and prevents every singleton in the cluster from racing to take over during a normal handoff.
+This absorbs the "owner A unregisters, owner B registers 50ms later" peaceful-handoff case and prevents every anchor in the cluster from racing to take over during a normal handoff.
 
 See parent PRD §Solution decision 2 for the semantic.
 
@@ -24,7 +25,7 @@ See parent PRD §Solution decision 2 for the semantic.
 - [x] Watcher pid dying mid-debounce does not leak the timer.
 - [x] Unit tests cover peaceful handoff, hostile handoff, churn, and watcher-death-mid-debounce.
 - [x] Property test: "watcher receives exactly one `:name_vacant` per owned→vacant edge that exceeds the debounce window."
-- [x] Decision journal entry written for "vacancy debounce window as default-on for Singleton consumers."
+- [x] Decision journal entry written for "vacancy debounce window as default-on for Anchor consumers."
 
 ## User stories addressed
 
