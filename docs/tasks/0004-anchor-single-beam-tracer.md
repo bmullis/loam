@@ -1,7 +1,8 @@
 ---
-status: todo
+status: done
 type: AFK
 created: 2026-04-26
+completed: 2026-04-28
 parent_prd: docs/prds/0003-anchor-on-zenoh.md
 blocked_by:
   - docs/tasks/0002-monitor-debounce-window.md
@@ -20,16 +21,16 @@ See parent PRD §Solution decisions 1, 3, 4 and §Implementation Decisions.
 
 ## Acceptance criteria
 
-- [ ] `Loam.Anchor.start_link/1` accepts the configuration shape from the PRD and starts cleanly.
-- [ ] `child_spec/1` returns a spec mountable in any application supervisor.
-- [ ] On start, registers `:name` in the configured `Loam.Registry`; `Loam.Registry.lookup/2` returns the child pid.
-- [ ] Local child crash is restarted by `LocalSup` with the same registered name (re-registered after restart, no spurious `:name_vacant` to other watchers within debounce).
-- [ ] Max-restarts exhaustion causes `LocalSup` to give up; anchor unregisters; name vacates.
-- [ ] Telemetry events `[:loam, :anchor, :registered]` and `[:loam, :anchor, :child_started]` fire with documented metadata.
-- [ ] Standard child-spec shapes accepted: `{Module, args}`, MFA-style maps, full `%{id, start, ...}` maps.
-- [ ] Decision journal entries written for: (a) free-for-all + jitter, (b) `:permanent`-only, (c) local Supervisor reuse.
-- [ ] Public API documented in moduledoc; loud disclaimer on stateless / `terminate/2`-flush usage.
-- [ ] Single-BEAM tests: register-on-start, crash-and-restart, max-restarts-exhaustion.
+- [x] `Loam.Anchor.start_link/1` accepts the configuration shape from the PRD and starts cleanly.
+- [x] `child_spec/1` returns a spec mountable in any application supervisor.
+- [x] On start, registers `:name` in the configured `Loam.Registry`; `Loam.Registry.lookup/2` returns `[{server_pid, child_pid}]`.
+- [x] Local child crash is restarted by `LocalSup` with the same registered name (no spurious `:name_vacant` to other watchers within debounce).
+- [x] Max-restarts exhaustion causes `LocalSup` to give up; anchor unregisters; name vacates.
+- [x] Telemetry events `[:loam, :anchor, :registered]` and `[:loam, :anchor, :child_started]` fire with documented metadata. `:evicted` emit-path wired (used by slice 0006 and the max-restarts path here).
+- [x] Standard child-spec shapes accepted: `{Module, args}`, MFA-style maps, full `%{id, start, ...}` maps.
+- [x] Decision journal entries written for: (a) free-for-all + jitter, (b) `:permanent`-only, (c) local Supervisor reuse.
+- [x] Public API documented in moduledoc; loud disclaimer on stateless / `terminate/2`-flush usage.
+- [x] Single-BEAM tests: register-on-start, crash-and-restart, max-restarts-exhaustion.
 
 ## User stories addressed
 

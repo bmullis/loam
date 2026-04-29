@@ -28,6 +28,7 @@ defmodule Loam.MixProject do
     [
       {:zenohex, "~> 0.9.0"},
       {:phoenix_pubsub, "~> 2.1"},
+      {:telemetry, "~> 1.2"},
       {:stream_data, "~> 1.3", only: [:dev, :test]}
     ]
   end
