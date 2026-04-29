@@ -17,7 +17,8 @@ defmodule Loam.Anchor.Server do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
+    gen_opts = if pn = Keyword.get(opts, :process_name), do: [name: pn], else: []
+    GenServer.start_link(__MODULE__, opts, gen_opts)
   end
 
   @impl true

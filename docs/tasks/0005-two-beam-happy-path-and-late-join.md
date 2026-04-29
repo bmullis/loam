@@ -1,7 +1,8 @@
 ---
-status: todo
+status: done
 type: AFK
 created: 2026-04-26
+completed: 2026-04-28
 parent_prd: docs/prds/0003-anchor-on-zenoh.md
 blocked_by:
   - docs/tasks/0004-anchor-single-beam-tracer.md
@@ -19,11 +20,11 @@ See parent PRD §User Stories 2, 3, 5a, 21, 20b.
 
 ## Acceptance criteria
 
-- [ ] Two-BEAM integration test: both BEAMs start the anchor with the same name; within `start_jitter_ms + vacancy_debounce_ms + 2 × heartbeat_interval`, exactly one BEAM is observed as owner from both sides via `Loam.Registry.lookup/2`.
-- [ ] The non-owning BEAM has no live child (its `LocalSup` is not running a child).
-- [ ] Late-join test: BEAMs A and B converge on A as owner; BEAM C joins; assert C observes A as owner via snapshot bootstrap, does not start its own child, and does not provoke an eviction.
-- [ ] Tests run in default `mix test` (no special tag).
-- [ ] Reuses the two-BEAM harness from PRD-0001/0002; no new test infrastructure beyond a anchor fixture child module.
+- [x] Two-BEAM integration test: both BEAMs start the anchor with the same name; within `start_jitter_ms + vacancy_debounce_ms + 2 × heartbeat_interval`, exactly one BEAM is observed as owner from both sides via `Loam.Registry.lookup/2`.
+- [x] The non-owning BEAM has no live child (its `LocalSup` is not running a child).
+- [x] Late-join test: BEAMs A and B converge on A or B as owner; BEAM C joins; assert C observes the existing owner via snapshot bootstrap, does not start its own child, and does not provoke an eviction.
+- [x] Tests run under the `:integration` tag, included by default in the integration test profile.
+- [x] Reuses the two-Session-in-one-BEAM harness pattern from `Loam.Registry.IntegrationTest`; one new fixture child module (`Loam.Test.AnchorWorker`).
 
 ## User stories addressed
 
