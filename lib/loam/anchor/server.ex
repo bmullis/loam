@@ -25,15 +25,20 @@ defmodule Loam.Anchor.Server do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
+    child_spec = Keyword.fetch!(opts, :child_spec)
+    :ok = validate_child_spec!(child_spec)
+
     state = %{
       registry: Keyword.fetch!(opts, :registry),
       name: Keyword.fetch!(opts, :name),
-      child_spec: Keyword.fetch!(opts, :child_spec),
+      child_spec: child_spec,
+      child_id: nil,
       max_restarts: Keyword.get(opts, :max_restarts, @default_max_restarts),
       max_seconds: Keyword.get(opts, :max_seconds, @default_max_seconds),
       start_jitter_ms: Keyword.get(opts, :start_jitter_ms, @default_start_jitter_ms),
       vacancy_debounce_ms:
         Keyword.get(opts, :vacancy_debounce_ms, @default_vacancy_debounce_ms),
+      local_zid: nil,
       status: :starting,
       monitor_ref: nil,
       local_sup: nil,
@@ -44,6 +49,28 @@ defmodule Loam.Anchor.Server do
 
     Process.send_after(self(), :try_start, jitter(state.start_jitter_ms))
     {:ok, state}
+  end
+
+  # `Loam.Anchor` only supports `:permanent` restart with a single child spec.
+  # See docs/journal/2026-04-28-anchor-permanent-only-decision.md.
+  defp validate_child_spec!(spec) when is_list(spec) do
+    raise ArgumentError,
+          "Loam.Anchor accepts a single child_spec, not a list. Multi-child anchors are not supported; mount multiple Loam.Anchor instances."
+  end
+
+  defp validate_child_spec!(spec) do
+    normalized = Supervisor.child_spec(spec, [])
+    restart = Map.get(normalized, :restart, :permanent)
+
+    case restart do
+      :permanent ->
+        :ok
+
+      other ->
+        raise ArgumentError,
+              "Loam.Anchor requires :permanent restart semantics; got #{inspect(other)}. " <>
+                "See docs/journal/2026-04-28-anchor-permanent-only-decision.md."
+    end
   end
 
   @impl true
@@ -111,8 +138,22 @@ defmodule Loam.Anchor.Server do
   end
 
   def handle_info({:loam_registry, :evicted, name, winner_zid}, %{name: name} = state) do
-    new_state = teardown_local_sup(state)
-    emit_telemetry(:evicted, state, %{reason: :lww_lost, winner_zid: winner_zid})
+    require Logger
+
+    Logger.info(fn ->
+      "Loam.Anchor evicted: registry=#{inspect(state.registry)} name=#{inspect(state.name)} " <>
+        "local_zid=#{inspect(state.local_zid)} winner_zid=#{inspect(winner_zid)}"
+    end)
+
+    new_state = terminate_child_via_sup(state)
+
+    emit_telemetry(:evicted, state, %{
+      reason: :lww_lost,
+      local_zid: state.local_zid,
+      winner_zid: winner_zid
+    })
+
+    new_state = stop_local_sup_only(new_state)
     {:noreply, install_monitor(%{new_state | status: :standby})}
   end
 
@@ -153,7 +194,9 @@ defmodule Loam.Anchor.Server do
       :ok ->
         sup_ref = Process.monitor(sup_pid)
         child_ref = Process.monitor(child_pid)
-        emit_telemetry(:registered, state, %{})
+        local_zid = capture_zid(state.registry) || state.local_zid
+        child_id = LocalSup.child_id(sup_pid)
+        emit_telemetry(:registered, state, %{local_zid: local_zid})
         emit_telemetry(:child_started, state, %{child_pid: child_pid})
 
         install_monitor(%{
@@ -162,7 +205,9 @@ defmodule Loam.Anchor.Server do
             local_sup: sup_pid,
             local_sup_ref: sup_ref,
             child_pid: child_pid,
-            child_ref: child_ref
+            child_ref: child_ref,
+            child_id: child_id,
+            local_zid: local_zid
         })
 
       {:error, {:already_registered, _pid}} ->
@@ -173,6 +218,37 @@ defmodule Loam.Anchor.Server do
         stop_local_sup(sup_pid)
         raise "Loam.Anchor registration failed: #{inspect(reason)}"
     end
+  end
+
+  defp capture_zid(registry) do
+    Loam.Registry.Session.zid(registry)
+  catch
+    :exit, _ -> nil
+  end
+
+  defp terminate_child_via_sup(%{local_sup: nil} = state), do: state
+
+  defp terminate_child_via_sup(%{local_sup: sup, child_id: id} = state) when is_pid(sup) do
+    if is_reference(state.child_ref), do: Process.demonitor(state.child_ref, [:flush])
+
+    if Process.alive?(sup) and not is_nil(id) do
+      try do
+        Supervisor.terminate_child(sup, id)
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    %{state | child_pid: nil, child_ref: nil}
+  end
+
+  defp stop_local_sup_only(%{local_sup: nil} = state), do: state
+
+  defp stop_local_sup_only(%{local_sup: sup, local_sup_ref: ref} = state) do
+    if is_reference(ref), do: Process.demonitor(ref, [:flush])
+    stop_local_sup(sup)
+    _ = safe_unregister(state)
+    %{state | local_sup: nil, local_sup_ref: nil}
   end
 
   defp start_local_sup(state) do

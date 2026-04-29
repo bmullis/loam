@@ -30,4 +30,14 @@ defmodule Loam.Anchor.LocalSup do
   catch
     :exit, _ -> nil
   end
+
+  @spec child_id(pid()) :: term() | nil
+  def child_id(sup) do
+    case Supervisor.which_children(sup) do
+      [{id, _pid, _type, _mods}] -> id
+      _ -> nil
+    end
+  catch
+    :exit, _ -> nil
+  end
 end

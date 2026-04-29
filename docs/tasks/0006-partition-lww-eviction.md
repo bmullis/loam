@@ -1,7 +1,8 @@
 ---
-status: todo
+status: done
 type: AFK
 created: 2026-04-26
+completed: 2026-04-28
 parent_prd: docs/prds/0003-anchor-on-zenoh.md
 blocked_by:
   - docs/tasks/0005-two-beam-happy-path-and-late-join.md
@@ -17,13 +18,13 @@ See parent PRD §Solution decisions 1, 5, 6 and §User Stories 4, 5, 6, 7, 11, 1
 
 ## Acceptance criteria
 
-- [ ] On `{:loam_registry, :evicted, ...}`, the local child is terminated via `Supervisor.terminate_child/2` (which runs `terminate/2` if the child traps exits, subject to shutdown timeout).
-- [ ] `[:loam, :anchor, :evicted]` telemetry fires with `reason: :lww_lost`, `local_zid`, `winner_zid` metadata.
-- [ ] After eviction, the anchor remains running and re-monitors the name; subsequent vacancy triggers a fresh registration race.
-- [ ] `@tag :partition` integration test: partition, both run, heal, exactly one survives, loser's child terminated, both sides converge on lookup.
-- [ ] Test asserts `terminate/2` ran on the loser (e.g., fixture child writes a marker on terminate, test reads it).
-- [ ] `Loam.Anchor` rejects unsupported config (`:transient`, `:temporary`, multi-child) with `{:error, ...}` per PRD §User Story 11.
-- [ ] Decision journal entry written for "no fence between loser termination and winner liveness."
+- [x] On `{:loam_registry, :evicted, ...}`, the local child is terminated via `Supervisor.terminate_child/2` (which runs `terminate/2` if the child traps exits, subject to shutdown timeout).
+- [x] `[:loam, :anchor, :evicted]` telemetry fires with `reason: :lww_lost`, `local_zid`, `winner_zid` metadata.
+- [x] After eviction, the anchor remains running and re-monitors the name; subsequent vacancy triggers a fresh registration race.
+- [x] `@tag :partition` integration test: partition, both run, heal, exactly one survives, loser's child terminated, both sides converge on lookup. (`test/loam/anchor_partition_test.exs`, sudo+pfctl, Darwin only.)
+- [x] Test asserts `terminate/2` ran on the loser (`AnchorWorker` reports `{:anchor_worker_terminated, pid, reason}` to its `:report_to`; partition test asserts it received).
+- [x] `Loam.Anchor` rejects unsupported config (`:transient`, `:temporary`, multi-child) with `ArgumentError` per PRD §User Story 11.
+- [x] Decision journal entry written for "no fence between loser termination and winner liveness."
 
 ## User stories addressed
 

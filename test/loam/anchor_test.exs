@@ -66,6 +66,51 @@ defmodule Loam.AnchorTest do
     end
   end
 
+  describe "config validation" do
+    setup :start_registry
+
+    test "rejects :transient restart", %{registry: r} do
+      bad = %{
+        id: AnchorWorker,
+        start: {AnchorWorker, :start_link, [[]]},
+        restart: :transient,
+        type: :worker
+      }
+
+      Process.flag(:trap_exit, true)
+      assert {:error, {%ArgumentError{message: msg}, _}} =
+               Anchor.start_link(registry: r, name: :svc, child_spec: bad, start_jitter_ms: 0)
+
+      assert msg =~ ":permanent"
+    end
+
+    test "rejects :temporary restart", %{registry: r} do
+      bad = %{
+        id: AnchorWorker,
+        start: {AnchorWorker, :start_link, [[]]},
+        restart: :temporary,
+        type: :worker
+      }
+
+      Process.flag(:trap_exit, true)
+      assert {:error, {%ArgumentError{}, _}} =
+               Anchor.start_link(registry: r, name: :svc, child_spec: bad, start_jitter_ms: 0)
+    end
+
+    test "rejects a list of child specs", %{registry: r} do
+      Process.flag(:trap_exit, true)
+      assert {:error, {%ArgumentError{message: msg}, _}} =
+               Anchor.start_link(
+                 registry: r,
+                 name: :svc,
+                 child_spec: [{AnchorWorker, []}, {AnchorWorker, []}],
+                 start_jitter_ms: 0
+               )
+
+      assert msg =~ "single child_spec"
+    end
+  end
+
   describe "single-BEAM register-on-start" do
     setup :start_registry
 

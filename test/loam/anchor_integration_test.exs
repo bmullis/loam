@@ -87,6 +87,24 @@ defmodule Loam.AnchorIntegrationTest do
     end
   end
 
+  defp attach_telemetry(events) do
+    parent = self()
+    handler_id = {__MODULE__, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        events,
+        fn event, measurements, metadata, _config ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    handler_id
+  end
+
   describe "two-BEAM happy path" do
     test "exactly one anchor wins; both sides converge on the same owner" do
       cluster = :"anchor_cluster_#{System.unique_integer([:positive])}"
@@ -118,6 +136,83 @@ defmodule Loam.AnchorIntegrationTest do
       assert loser_state.status == :standby
       assert loser_state.local_sup == nil
       assert loser_state.child_pid == nil
+    end
+  end
+
+  describe "LWW eviction telemetry" do
+    test "loser fires :evicted with reason :lww_lost; child terminate/2 ran" do
+      cluster = :"anchor_cluster_#{System.unique_integer([:positive])}"
+      proc_a = :"anchor_sess_a_#{System.unique_integer([:positive])}"
+      proc_b = :"anchor_sess_b_#{System.unique_integer([:positive])}"
+
+      port_a = unique_port()
+      port_b = unique_port()
+
+      start_session(cluster, proc_a, port_a, [port_b])
+      start_session(cluster, proc_b, port_b, [port_a])
+      Process.sleep(@handshake_ms)
+
+      attach_telemetry([[:loam, :anchor, :evicted]])
+
+      {:ok, anchor_a} =
+        Anchor.start_link(
+          registry: proc_a,
+          name: :svc,
+          child_spec: {AnchorWorker, [report_to: self()]},
+          start_jitter_ms: 0,
+          vacancy_debounce_ms: 200
+        )
+
+      Process.unlink(anchor_a)
+
+      {:ok, anchor_b} =
+        Anchor.start_link(
+          registry: proc_b,
+          name: :svc,
+          child_spec: {AnchorWorker, [report_to: self()]},
+          start_jitter_ms: 0,
+          vacancy_debounce_ms: 200
+        )
+
+      Process.unlink(anchor_b)
+
+      on_exit(fn ->
+        for p <- [anchor_a, anchor_b] do
+          try do
+            if Process.alive?(p), do: GenServer.stop(p, :normal, 5_000)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, [{owner_pid, _}]} = wait_until_converged([proc_a, proc_b], :svc, @converge_ms)
+
+      # Eviction telemetry observed on the loser, with full metadata.
+      assert_receive {:telemetry, [:loam, :anchor, :evicted], _,
+                      %{
+                        reason: :lww_lost,
+                        registry: _,
+                        name: :svc,
+                        local_zid: lzid,
+                        winner_zid: wzid
+                      }},
+                     @converge_ms
+
+      assert is_binary(lzid)
+      assert is_binary(wzid)
+      assert lzid != wzid
+
+      # The loser's child ran terminate/2 (AnchorWorker reports it).
+      assert_received {:anchor_worker_terminated, _terminated_pid, _reason}
+
+      # Loser is alive and in standby with monitor.
+      loser_pid = if owner_pid == anchor_a, do: anchor_b, else: anchor_a
+      Process.sleep(200)
+      loser_state = :sys.get_state(loser_pid)
+      assert loser_state.status == :standby
+      assert is_reference(loser_state.monitor_ref)
+      assert loser_state.local_sup == nil
     end
   end
 
